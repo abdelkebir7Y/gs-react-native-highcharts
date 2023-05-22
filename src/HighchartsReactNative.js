@@ -1,0 +1,218 @@
+import React from "react";
+import { Dimensions, StyleSheet, View } from "react-native";
+import { WebView } from "react-native-webview";
+import { Asset } from "expo-asset";
+import * as FileSystem from "expo-file-system";
+
+import HighchartsModules from "./HighchartsModules";
+
+const win = Dimensions.get("window");
+const stringifiedScripts = {};
+
+export default class HighchartsReactNative extends React.PureComponent {
+  static getDerivedStateFromProps(props, state) {
+    let width = Dimensions.get("window").width;
+    let height = Dimensions.get("window").height;
+    if (props.styles) {
+      const userStyles = StyleSheet.flatten(props.styles);
+      const { width: w, height: h } = userStyles;
+      width = w;
+      height = h;
+    }
+    return {
+      width: width,
+      height: height,
+    };
+  }
+
+  setHcAssets = async (useCDN) => {
+    try {
+      await this.setLayout();
+      await this.addScript("highcharts", null, useCDN);
+      await this.addScript("highcharts-more", null, useCDN);
+      await this.addScript("highcharts-3d", null, useCDN);
+      for (const mod of this.state.modules) {
+        await this.addScript(mod, true, useCDN);
+      }
+      this.setState({
+        hcModulesReady: true,
+      });
+    } catch (error) {
+      console.error("Failed to fetch scripts or layout. " + error.message);
+    }
+  };
+
+  addScript = async (name, isModule, useCDN) => {
+    const moduleId =
+      isModule && name !== "highcharts-more" && name !== "highcharts-3d"
+        ? HighchartsModules.modules[name]
+        : HighchartsModules[name];
+    const [{ localUri }] = await Asset.loadAsync(moduleId);
+    stringifiedScripts[name] = await FileSystem.readAsStringAsync(localUri);
+  };
+
+  setLayout = async () => {
+    const [{ localUri }] = await Asset.loadAsync(
+      require("../highcharts-layout/index.html")
+    );
+    const layoutHTML = await FileSystem.readAsStringAsync(localUri);
+
+    this.setState({
+      layoutHTML,
+    });
+  };
+
+  constructor(props) {
+    super(props);
+
+    // extract width and height from user styles
+    const userStyles = StyleSheet.flatten(props.styles);
+
+    this.state = {
+      width: userStyles.width || win.width,
+      height: userStyles.height || win.height,
+      chartOptions: props.options,
+      useCDN: props.useCDN || false,
+      modules: props.modules || [],
+      setOptions: props.setOptions || {},
+      renderedOnce: false,
+      hcModulesReady: false,
+    };
+    this.webviewRef = null;
+
+    this.setHcAssets(this.state.useCDN);
+  }
+  componentDidUpdate() {
+    this.webviewRef &&
+      this.webviewRef.postMessage(this.serialize(this.props.options, true));
+  }
+  componentDidMount() {
+    this.setState({ renderedOnce: true });
+  }
+  /**
+   * Convert JSON to string. When is updated, functions (like events.load)
+   * is not wrapped in quotes.
+   */
+  serialize(chartOptions, isUpdate) {
+    var hcFunctions = {},
+      serializedOptions,
+      i = 0;
+
+    serializedOptions = JSON.stringify(chartOptions, function (val, key) {
+      var fcId = "###HighchartsFunction" + i + "###";
+
+      // set reference to function for the later replacement
+      if (typeof key === "function") {
+        hcFunctions[fcId] = key.toString();
+        i++;
+        return isUpdate ? key.toString() : fcId;
+      }
+
+      return key;
+    });
+
+    // replace ids with functions.
+    if (!isUpdate) {
+      Object.keys(hcFunctions).forEach(function (key) {
+        serializedOptions = serializedOptions.replace(
+          '"' + key + '"',
+          hcFunctions[key]
+        );
+      });
+    }
+
+    return serializedOptions;
+  }
+  render() {
+    if (this.state.hcModulesReady) {
+      const setOptions = this.state.setOptions;
+      const runFirst = `
+                window.data = "${this.props.data ? this.props.data : null}";
+                var modulesList = ${JSON.stringify(this.state.modules)};
+                var readable = ${JSON.stringify(stringifiedScripts)}
+
+                function loadScripts(file, callback, redraw) {
+                    var hcScript = document.createElement('script');
+                    hcScript.innerHTML = readable[file]
+                    document.body.appendChild(hcScript);
+
+                    if (callback) {
+                        callback.call();
+                    }
+
+                    if (redraw) {
+                        Highcharts.setOptions(${this.serialize(setOptions)});
+                        Highcharts.chart("container", ${this.serialize(
+                          this.props.options
+                        )});
+                    }
+                }
+
+                loadScripts('highcharts', function () {
+                    var redraw = modulesList.length > 0 ? false : true;
+                    loadScripts('highcharts-more', function () {
+                        if (modulesList.length > 0) {
+                            for (var i = 0; i < modulesList.length; i++) {
+                                if (i === (modulesList.length - 1)) {
+                                    redraw = true;
+                                } else {
+                                    redraw = false;
+                                }
+                                loadScripts(modulesList[i], undefined, redraw, true);
+                            }
+                        }
+                    }, redraw);
+                }, false);
+            `;
+
+      // Create container for the chart
+      return (
+        <View
+          style={[
+            this.props.styles,
+            { width: this.state.width, height: this.state.height },
+          ]}
+        >
+          <WebView
+            ref={(ref) => {
+              this.webviewRef = ref;
+            }}
+            onMessage={
+              this.props.onMessage
+                ? (event) => this.props.onMessage(event.nativeEvent.data)
+                : () => {}
+            }
+            source={{
+              html: this.state.layoutHTML,
+            }}
+            injectedJavaScript={runFirst}
+            originWhitelist={["*"]}
+            automaticallyAdjustContentInsets={true}
+            allowFileAccess={true}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+            useWebKit={true}
+            scrollEnabled={false}
+            mixedContentMode="always"
+            allowFileAccessFromFileURLs={true}
+            startInLoadingState={this.props.loader}
+            style={this.props.webviewStyles}
+            androidHardwareAccelerationDisabled
+            {...this.props.webviewProps}
+          />
+        </View>
+      );
+    } else {
+      return this.props.loadingComponent ? (
+        this.props.loadingComponent()
+      ) : (
+        <View
+          style={[
+            this.props.styles,
+            { width: this.state.width, height: this.state.height },
+          ]}
+        />
+      );
+    }
+  }
+}

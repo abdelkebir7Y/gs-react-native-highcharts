@@ -1,0 +1,24 @@
+{
+  "name": "gs-react-native-highcharts",
+  "version": "1.0.0",
+  "description": "highcharts for reactc native ",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abdelkebir7Y/gs-react-native-highcharts.git"
+  },
+  "keywords": [
+    "react native",
+    "expo",
+    "highcharts"
+  ],
+  "author": "abdelkebir7y",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/abdelkebir7Y/gs-react-native-highcharts/issues"
+  },
+  "homepage": "https://github.com/abdelkebir7Y/gs-react-native-highcharts#readme"
+}
